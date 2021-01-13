@@ -24,6 +24,14 @@ import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.kstream.KTable;
 import org.apache.kafka.streams.kstream.Produced;
 
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.config.SaslConfigs;
+
+import java.io.InputStream;
+import java.io.FileInputStream;
+import java.io.IOException;
+
+
 import java.util.Arrays;
 import java.util.Properties;
 import java.util.regex.Pattern;
@@ -118,10 +126,10 @@ public class WordCountLambdaExample {
    * The Streams application as a whole can be launched like any normal Java application that has a `main()` method.
    */
   public static void main(final String[] args) {
-    final String bootstrapServers = args.length > 0 ? args[0] : "localhost:9092";
+    final String propertyFile = args.length > 0 ? args[0] : "config.properties";
 
     // Configure the Streams application.
-    final Properties streamsConfiguration = getStreamsConfiguration(bootstrapServers);
+    final Properties streamsConfiguration = getStreamsConfiguration(propertyFile);
 
     // Define the processing topology of the Streams application.
     final StreamsBuilder builder = new StreamsBuilder();
@@ -153,17 +161,36 @@ public class WordCountLambdaExample {
    * Various Kafka Streams related settings are defined here such as the location of the target Kafka cluster to use.
    * Additionally, you could also define Kafka Producer and Kafka Consumer settings when needed.
    *
-   * @param bootstrapServers Kafka cluster address
+   * @param propertyFile file with properties for Kafka connection
    * @return Properties getStreamsConfiguration
    */
-  static Properties getStreamsConfiguration(final String bootstrapServers) {
+  static Properties getStreamsConfiguration(final String propertyFile) {
     final Properties streamsConfiguration = new Properties();
-    // Give the Streams application a unique name.  The name must be unique in the Kafka cluster
-    // against which the application is run.
-    streamsConfiguration.put(StreamsConfig.APPLICATION_ID_CONFIG, "wordcount-lambda-example");
-    streamsConfiguration.put(StreamsConfig.CLIENT_ID_CONFIG, "wordcount-lambda-example-client");
-    // Where to find Kafka broker(s).
-    streamsConfiguration.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+
+    // Property file should look something like this:
+    // application.id=wordcount-lambda-example
+    // client.id=wordcount-lambda-example-client
+    //
+    // bootstrap.servers=<CONFLUENT_CLOUD_BOOTSTRAP_SERVER>:9092
+    // ssl.endpoint.identification.algorithm=https
+    // security.protocol=SASL_SSL
+    // sasl.mechanism=PLAIN
+    // sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="<KEY>" password="<SECRET>";
+
+    try (InputStream input = new FileInputStream(propertyFile)) {
+      streamsConfiguration.load(input);
+    } catch (final IOException ex) {
+      ex.printStackTrace();
+    }
+
+    streamsConfiguration.put(StreamsConfig.REPLICATION_FACTOR_CONFIG, 3);
+
+    // Recommended performance/resilience settings
+    streamsConfiguration.put(StreamsConfig.producerPrefix(ProducerConfig.RETRIES_CONFIG), 2147483647);
+    streamsConfiguration.put("producer.confluent.batch.expiry.ms", 2147483647);
+    streamsConfiguration.put(StreamsConfig.producerPrefix(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG), 300000);
+    streamsConfiguration.put(StreamsConfig.producerPrefix(ProducerConfig.MAX_BLOCK_MS_CONFIG), 2147483647);
+
     // Specify default (de)serializers for record keys and for record values.
     streamsConfiguration.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
     streamsConfiguration.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
