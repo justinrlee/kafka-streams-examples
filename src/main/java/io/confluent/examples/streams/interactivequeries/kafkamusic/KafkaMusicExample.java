@@ -53,6 +53,13 @@ import java.util.TreeSet;
 
 import static java.util.Collections.singletonMap;
 
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.config.SaslConfigs;
+
+import java.io.InputStream;
+import java.io.FileInputStream;
+import java.io.IOException;
+
 /**
  * Demonstrates how to locate and query state stores (Interactive Queries).
  *
@@ -190,18 +197,24 @@ public class KafkaMusicExample {
           "[<hostnameForRestEndPoint> (optional, default: " + DEFAULT_REST_ENDPOINT_HOSTNAME + ")]");
     }
     final int restEndpointPort = Integer.parseInt(args[0]);
-    final String bootstrapServers = args.length > 1 ? args[1] : "localhost:9092";
+    final String propertyFile = args.length > 1 ? args[1] : "config.properties";
     final String schemaRegistryUrl = args.length > 2 ? args[2] : "http://localhost:8081";
     final String restEndpointHostname = args.length > 3 ? args[3] : DEFAULT_REST_ENDPOINT_HOSTNAME;
     final HostInfo restEndpoint = new HostInfo(restEndpointHostname, restEndpointPort);
 
-    System.out.println("Connecting to Kafka cluster via bootstrap servers " + bootstrapServers);
+    System.out.println("Connecting to Kafka cluster via config file " + propertyFile);
     System.out.println("Connecting to Confluent schema registry at " + schemaRegistryUrl);
     System.out.println("REST endpoint at http://" + restEndpointHostname + ":" + restEndpointPort);
 
+    final Map<String, String> serdeConfig = Map.of(
+      AbstractKafkaAvroSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG, "https://xxx:443",
+      AbstractKafkaAvroSerDeConfig.BASIC_AUTH_CREDENTIALS_SOURCE, "USER_INFO",
+      AbstractKafkaAvroSerDeConfig.SCHEMA_REGISTRY_USER_INFO_CONFIG, "xxx:yyy"
+      );
+
     final KafkaStreams streams = new KafkaStreams(
-      buildTopology(singletonMap(AbstractKafkaAvroSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG, schemaRegistryUrl)),
-      streamsConfig(bootstrapServers, restEndpointPort, "/tmp/kafka-streams", restEndpointHostname)
+      buildTopology(serdeConfig),
+      streamsConfig(propertyFile, restEndpointPort, "/tmp/kafka-streams", restEndpointHostname)
     );
 
     // Always (and unconditionally) clean local state prior to starting the processing topology.
@@ -243,16 +256,38 @@ public class KafkaMusicExample {
     return interactiveQueriesRestService;
   }
 
-  static Properties streamsConfig(final String bootstrapServers,
+  static Properties streamsConfig(final String propertyFile,
                                   final int applicationServerPort,
                                   final String stateDir,
                                   final String host) {
     final Properties streamsConfiguration = new Properties();
+    
+
+    try (InputStream input = new FileInputStream(propertyFile)) {
+      streamsConfiguration.load(input);
+    } catch (final IOException ex) {
+      ex.printStackTrace();
+    }
+
+    streamsConfiguration.put(StreamsConfig.REPLICATION_FACTOR_CONFIG, 3);
+
+    // Recommended performance/resilience settings
+    streamsConfiguration.put(StreamsConfig.producerPrefix(ProducerConfig.RETRIES_CONFIG), 2147483647);
+    streamsConfiguration.put("producer.confluent.batch.expiry.ms", 2147483647);
+    streamsConfiguration.put(StreamsConfig.producerPrefix(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG), 300000);
+    streamsConfiguration.put(StreamsConfig.producerPrefix(ProducerConfig.MAX_BLOCK_MS_CONFIG), 2147483647);
+
+    // Property file should look something like this:    //
+    // bootstrap.servers=<CONFLUENT_CLOUD_BOOTSTRAP_SERVER>:9092
+    // ssl.endpoint.identification.algorithm=https
+    // security.protocol=SASL_SSL
+    // sasl.mechanism=PLAIN
+    // sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="<KEY>" password="<SECRET>";
+    
     // Give the Streams application a unique name.  The name must be unique in the Kafka cluster
     // against which the application is run.
     streamsConfiguration.put(StreamsConfig.APPLICATION_ID_CONFIG, "kafka-music-charts");
-    // Where to find Kafka broker(s).
-    streamsConfiguration.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+    streamsConfiguration.put(StreamsConfig.CLIENT_ID_CONFIG, "kafka-music-charts-client");
     // Provide the details of our embedded http service that we'll use to connect to this streams
     // instance and discover locations of stores.
     streamsConfiguration.put(StreamsConfig.APPLICATION_SERVER_CONFIG, host + ":" + applicationServerPort);
